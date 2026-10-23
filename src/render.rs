@@ -16,6 +16,8 @@ pub enum Data<'a> {
     Languages(&'a GithubData),
     Streak(&'a GithubData),
     Spotify(Option<&'a Track>),
+    /// A user's own card: (title, text).
+    Custom(&'a str, &'a str),
     Error(Card, &'a str),
 }
 
@@ -158,6 +160,56 @@ fn spotify(t: Option<&Track>, id: usize) -> (u32, String) {
     (140, s)
 }
 
+const WRAP_CHARS: usize = 48;
+const MAX_LINES: usize = 8;
+
+/// Word-wraps `text` to lines of at most `max` chars, keeping line breaks; past `lines`
+/// lines the last kept one ends in an ellipsis. Returns unescaped text.
+// ponytail: counts chars, not pixels, so wide glyphs (CJK, emoji) can overflow; use font metrics if that matters.
+fn wrap(text: &str, max: usize, lines: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for para in text.lines() {
+        let mut line = String::new();
+        for word in para.split_whitespace() {
+            let mut word = word.to_string();
+            loop {
+                let (len, wlen) = (line.chars().count(), word.chars().count());
+                if len == 0 && wlen <= max {
+                    line = word;
+                } else if len > 0 && len + 1 + wlen <= max {
+                    line.push(' ');
+                    line.push_str(&word);
+                } else if len > 0 {
+                    out.push(std::mem::take(&mut line));
+                    continue;
+                } else {
+                    // A word longer than a whole line: hard-break it.
+                    out.push(word.chars().take(max).collect());
+                    word = word.chars().skip(max).collect();
+                    continue;
+                }
+                break;
+            }
+        }
+        out.push(line);
+    }
+    if out.len() > lines {
+        out.truncate(lines);
+        let last = &mut out[lines - 1];
+        *last = format!("{}…", last.chars().take(max - 1).collect::<String>());
+    }
+    out
+}
+
+fn custom(heading: &str, text: &str) -> (u32, String) {
+    let mut s = title(heading);
+    let lines = wrap(text, WRAP_CHARS, MAX_LINES);
+    for (i, line) in lines.iter().enumerate() {
+        let _ = write!(s, r#"<text x="25" y="{}" class="l">{}</text>"#, 65 + 20 * i as u32, esc(line));
+    }
+    (55 + 20 * lines.len() as u32, s)
+}
+
 fn error(card: Card, msg: &str) -> (u32, String) {
     let name = match card {
         Card::Github => "GitHub Stats",
@@ -179,6 +231,7 @@ pub fn compose(cards: &[Data], theme: Theme, columns: u8) -> String {
             Data::Languages(d) => languages(d),
             Data::Streak(d) => streak(d),
             Data::Spotify(t) => spotify(*t, i),
+            Data::Custom(t, text) => custom(t, text),
             Data::Error(card, msg) => error(*card, msg),
         })
         .collect();
@@ -259,6 +312,27 @@ mod tests {
         assert!(two.contains(r#"width="850" height="285""#)); // row max 195 + 10 + 80
         let lone = compose(&[Data::Spotify(None)], Theme::Light, 2);
         assert!(lone.contains(r#"width="420" height="80""#));
+    }
+
+    #[test]
+    fn wraps_text() {
+        assert_eq!(wrap("", 10, 3), Vec::<String>::new());
+        assert_eq!(wrap("aa bb cc", 5, 3), ["aa bb", "cc"]);
+        assert_eq!(wrap("a
+
+b", 5, 3), ["a", "", "b"]);
+        assert_eq!(wrap("abcdefghijkl x", 5, 9), ["abcde", "fghij", "kl x"]);
+        assert_eq!(wrap("a b c d", 1, 3), ["a", "b", "…"]);
+        assert_eq!(wrap("aaaaa bbbbb ccccc", 5, 2), ["aaaaa", "bbbb…"]);
+    }
+
+    #[test]
+    fn custom_card() {
+        let svg = compose(&[Data::Custom("<b>Me</b>", "hi <script>
+there")], Theme::Light, 1);
+        assert!(!svg.contains("<script>") && !svg.contains("<b>"));
+        assert!(svg.contains("hi &lt;script&gt;"));
+        assert!(svg.contains(r#"width="420" height="95""#), "{svg}"); // 55 + 2 lines
     }
 
     #[test]

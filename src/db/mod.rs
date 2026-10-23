@@ -20,6 +20,14 @@ pub enum Card {
     Spotify,
 }
 
+/// A layout entry: a built-in card name, or a user's own `{"title", "text"}` card.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Item {
+    Card(Card),
+    Custom { title: String, text: String },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Theme {
@@ -29,7 +37,7 @@ pub enum Theme {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Layout {
-    pub cards: Vec<Card>,
+    pub cards: Vec<Item>,
     pub columns: u8,
 }
 

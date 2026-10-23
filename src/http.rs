@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use crate::auth::AuthUser;
 use crate::config::Config;
 use crate::crypto::Sealer;
-use crate::db::{self, Card, Layout, Pool, Profile, Theme};
+use crate::db::{self, Card, Item, Layout, Pool, Profile, Theme};
 use crate::github::{self, GithubData};
 use crate::render::{self, Data};
 use crate::spotify::{self, Track};
@@ -30,6 +30,9 @@ const GITHUB_TTL: Duration = Duration::from_secs(4 * 3600);
 const SPOTIFY_TTL: Duration = Duration::from_secs(30);
 const ERROR_TTL: Duration = Duration::from_secs(300);
 const STATE_TTL_SECS: u64 = 600;
+const MAX_CUSTOM: usize = 5;
+const MAX_TITLE: usize = 38;
+const MAX_TEXT: usize = 280;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -108,10 +111,30 @@ fn validate(b: &mut PutBody) -> Result<(), &'static str> {
         return Err("Columns must be 1 or 2");
     }
     let mut seen = Vec::new();
-    b.layout.cards.retain(|c| !seen.contains(c) && {
-        seen.push(*c);
-        true
+    b.layout.cards.retain(|c| match c {
+        Item::Card(c) => !seen.contains(c) && {
+            seen.push(*c);
+            true
+        },
+        Item::Custom { .. } => true,
     });
+    let mut customs = 0;
+    for c in &mut b.layout.cards {
+        if let Item::Custom { title, text } = c {
+            customs += 1;
+            *title = title.trim().to_string();
+            *text = text.trim().to_string();
+            if title.is_empty() || title.chars().count() > MAX_TITLE {
+                return Err("Custom card title must be 1-38 characters");
+            }
+            if text.chars().count() > MAX_TEXT {
+                return Err("Custom card text must be at most 280 characters");
+            }
+        }
+    }
+    if customs > MAX_CUSTOM {
+        return Err("At most 5 custom cards");
+    }
     Ok(())
 }
 
@@ -229,7 +252,7 @@ pub async fn card(State(st): State<AppState>, Path(file): Path<String>) -> Respo
     };
     let cards = &profile.layout.cards;
 
-    let gh = if cards.iter().any(|c| *c != Card::Spotify) {
+    let gh = if cards.iter().any(|c| matches!(c, Item::Card(c) if *c != Card::Spotify)) {
         if profile.github_login.is_empty() {
             Err("no GitHub username set".to_string())
         } else {
@@ -239,7 +262,7 @@ pub async fn card(State(st): State<AppState>, Path(file): Path<String>) -> Respo
     } else {
         Err(String::new())
     };
-    let sp = if cards.contains(&Card::Spotify) {
+    let sp = if cards.contains(&Item::Card(Card::Spotify)) {
         cached(&st.spotify, &profile.user_id, SPOTIFY_TTL, spotify_track(&st, &profile.user_id)).await
     } else {
         Err(String::new())
@@ -247,16 +270,23 @@ pub async fn card(State(st): State<AppState>, Path(file): Path<String>) -> Respo
 
     let data: Vec<Data> = cards
         .iter()
-        .map(|c| match (c, &gh, &sp) {
-            (Card::Spotify, _, Ok(t)) => Data::Spotify(t.as_ref()),
-            (Card::Spotify, _, Err(e)) => Data::Error(*c, e),
-            (_, Err(e), _) => Data::Error(*c, e),
-            (Card::Github, Ok(d), _) => Data::Github(d),
-            (Card::Languages, Ok(d), _) => Data::Languages(d),
-            (Card::Streak, Ok(d), _) => Data::Streak(d),
+        .map(|item| match item {
+            Item::Custom { title, text } => Data::Custom(title, text),
+            Item::Card(c) => builtin(c, &gh, &sp),
         })
         .collect();
     svg(StatusCode::OK, render::compose(&data, profile.theme, profile.layout.columns))
+}
+
+fn builtin<'a>(c: &Card, gh: &'a Result<GithubData, String>, sp: &'a Result<Option<Track>, String>) -> Data<'a> {
+    match (c, gh, sp) {
+        (Card::Spotify, _, Ok(t)) => Data::Spotify(t.as_ref()),
+        (Card::Spotify, _, Err(e)) => Data::Error(*c, e),
+        (_, Err(e), _) => Data::Error(*c, e),
+        (Card::Github, Ok(d), _) => Data::Github(d),
+        (Card::Languages, Ok(d), _) => Data::Languages(d),
+        (Card::Streak, Ok(d), _) => Data::Streak(d),
+    }
 }
 
 #[cfg(test)]
@@ -265,16 +295,26 @@ mod tests {
 
     const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-    fn body(slug: &str, login: &str, cards: Vec<Card>, columns: u8) -> PutBody {
+    fn body(slug: &str, login: &str, cards: Vec<Item>, columns: u8) -> PutBody {
         PutBody { slug: slug.into(), github_login: login.into(), layout: Layout { cards, columns }, theme: Theme::Light }
+    }
+
+    fn custom(title: &str, text: &str) -> Item {
+        Item::Custom { title: title.into(), text: text.into() }
     }
 
     #[test]
     fn validates_profile() {
-        let mut b = body(" Chad-1 ", "octo-cat", vec![Card::Github, Card::Spotify, Card::Github], 2);
+        let (gh, sp) = (Item::Card(Card::Github), Item::Card(Card::Spotify));
+        let mut b = body(" Chad-1 ", "octo-cat", vec![gh.clone(), custom(" Hi ", "x"), sp.clone(), gh.clone(), custom("Hi", "y")], 2);
         assert!(validate(&mut b).is_ok());
         assert_eq!(b.slug, "chad-1");
-        assert_eq!(b.layout.cards, vec![Card::Github, Card::Spotify]);
+        assert_eq!(b.layout.cards, vec![gh.clone(), custom("Hi", "x"), sp, custom("Hi", "y")]);
+        assert!(validate(&mut body("abc", "", vec![custom("  ", "x")], 1)).is_err());
+        assert!(validate(&mut body("abc", "", vec![custom(&"t".repeat(39), "")], 1)).is_err());
+        assert!(validate(&mut body("abc", "", vec![custom("t", &"é".repeat(280))], 1)).is_ok());
+        assert!(validate(&mut body("abc", "", vec![custom("t", &"x".repeat(281))], 1)).is_err());
+        assert!(validate(&mut body("abc", "", vec![custom("t", ""); 6], 1)).is_err());
         assert!(validate(&mut body("ab", "", vec![], 1)).is_err());
         assert!(validate(&mut body("a_bc", "", vec![], 1)).is_err());
         assert!(validate(&mut body("abc", "bad/login", vec![], 1)).is_err());
