@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
-import { ArrowDownIcon, ArrowUpIcon, CopyIcon } from 'lucide-react'
+import { ArrowDownIcon, ArrowUpIcon, CopyIcon, PlusIcon, Trash2Icon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
-import { api, CARDS, svgUrl, type Card, type Profile } from '@/lib/api'
+import { api, CARDS, MAX_CUSTOM, svgUrl, type Card, type Custom, type Entry, type Profile } from '@/lib/api'
 import { userManager } from '@/lib/auth'
 
 const LABELS: Record<Card, string> = {
@@ -15,13 +15,19 @@ const LABELS: Record<Card, string> = {
   spotify: 'Spotify now playing',
 }
 
-type Item = { card: Card; on: boolean }
+// `key` is only a React key: the card name, or a random id for custom cards (always on).
+type Item = { key: string; on: boolean; entry: Entry }
 
-/** Saved cards first, in their order, then the rest switched off. */
-const toItems = (cards: Card[]): Item[] => [
-  ...cards.map((card) => ({ card, on: true })),
-  ...CARDS.filter((c) => !cards.includes(c)).map((card) => ({ card, on: false })),
+const custom = (entry: Custom): Item => ({ key: crypto.randomUUID(), on: true, entry })
+
+/** Saved cards first, in their order, then the unused built-ins switched off. */
+const toItems = (cards: Entry[]): Item[] => [
+  ...cards.map((entry) => (typeof entry === 'string' ? { key: entry, on: true, entry } : custom(entry))),
+  ...CARDS.filter((c) => !cards.includes(c)).map((card) => ({ key: card, on: false, entry: card })),
 ]
+
+const TEXTAREA =
+  'w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30'
 
 export default function App() {
   const [loaded, setLoaded] = useState(false)
@@ -60,6 +66,9 @@ export default function App() {
       .finally(() => setLoaded(true))
   }, [])
 
+  const update = (key: string, patch: Partial<Item>) => setItems((xs) => xs.map((y) => (y.key === key ? { ...y, ...patch } : y)))
+  const customCount = items.filter((x) => typeof x.entry !== 'string').length
+
   const move = (i: number, by: -1 | 1) =>
     setItems((xs) => {
       const next = [...xs]
@@ -86,7 +95,7 @@ export default function App() {
         slug,
         githubLogin,
         theme,
-        layout: { columns, cards: items.filter((x) => x.on).map((x) => x.card) },
+        layout: { columns, cards: items.filter((x) => x.on).map((x) => x.entry) },
       }
       const p = await api<Profile>('/me', { method: 'PUT', body: JSON.stringify(body) })
       setSlug(p.slug)
@@ -157,25 +166,67 @@ export default function App() {
         <fieldset className="grid gap-2">
           <legend className="mb-2 text-sm font-medium">Cards</legend>
           <ul className="grid gap-2">
-            {items.map((x, i) => (
-              <li key={x.card} className="flex items-center gap-3 rounded-lg border px-3 py-2">
-                <Checkbox
-                  id={`card-${x.card}`}
-                  checked={x.on}
-                  onCheckedChange={(on) => setItems((xs) => xs.map((y) => (y.card === x.card ? { ...y, on } : y)))}
-                />
-                <Label htmlFor={`card-${x.card}`} className="flex-1">
-                  {LABELS[x.card]}
-                </Label>
-                <Button type="button" size="icon" variant="ghost" aria-label={`Move ${LABELS[x.card]} up`} disabled={i === 0} onClick={() => move(i, -1)}>
-                  <ArrowUpIcon />
-                </Button>
-                <Button type="button" size="icon" variant="ghost" aria-label={`Move ${LABELS[x.card]} down`} disabled={i === items.length - 1} onClick={() => move(i, 1)}>
-                  <ArrowDownIcon />
-                </Button>
-              </li>
-            ))}
+            {items.map((x, i) => {
+              const name = typeof x.entry === 'string' ? LABELS[x.entry] : x.entry.title || 'custom card'
+              const arrows = (
+                <>
+                  <Button type="button" size="icon" variant="ghost" aria-label={`Move ${name} up`} disabled={i === 0} onClick={() => move(i, -1)}>
+                    <ArrowUpIcon />
+                  </Button>
+                  <Button type="button" size="icon" variant="ghost" aria-label={`Move ${name} down`} disabled={i === items.length - 1} onClick={() => move(i, 1)}>
+                    <ArrowDownIcon />
+                  </Button>
+                </>
+              )
+              if (typeof x.entry === 'string')
+                return (
+                  <li key={x.key} className="flex items-center gap-3 rounded-lg border px-3 py-2">
+                    <Checkbox id={`card-${x.key}`} checked={x.on} onCheckedChange={(on) => update(x.key, { on })} />
+                    <Label htmlFor={`card-${x.key}`} className="flex-1">
+                      {name}
+                    </Label>
+                    {arrows}
+                  </li>
+                )
+              const c = x.entry
+              return (
+                <li key={x.key} className="flex items-start gap-3 rounded-lg border px-3 py-2">
+                  <div className="grid flex-1 gap-2">
+                    <Input
+                      aria-label="Card title"
+                      placeholder="Title"
+                      maxLength={38}
+                      required
+                      value={c.title}
+                      onChange={(e) => update(x.key, { entry: { ...c, title: e.target.value } })}
+                    />
+                    <textarea
+                      aria-label={`Text for ${name}`}
+                      placeholder="Text"
+                      maxLength={280}
+                      rows={3}
+                      className={TEXTAREA}
+                      value={c.text}
+                      onChange={(e) => update(x.key, { entry: { ...c, text: e.target.value } })}
+                    />
+                  </div>
+                  {arrows}
+                  <Button type="button" size="icon" variant="ghost" aria-label={`Delete ${name}`} onClick={() => setItems((xs) => xs.filter((y) => y.key !== x.key))}>
+                    <Trash2Icon />
+                  </Button>
+                </li>
+              )
+            })}
           </ul>
+          <Button
+            type="button"
+            variant="outline"
+            className="justify-self-start"
+            disabled={customCount >= MAX_CUSTOM}
+            onClick={() => setItems((xs) => [...xs, custom({ title: '', text: '' })])}
+          >
+            <PlusIcon /> Add custom card
+          </Button>
         </fieldset>
 
         <div className="flex flex-wrap items-center gap-3">

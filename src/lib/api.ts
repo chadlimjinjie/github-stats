@@ -2,11 +2,15 @@ import { accessToken, GATEWAY_URL } from './auth'
 
 export const CARDS = ['github', 'languages', 'streak', 'spotify'] as const
 export type Card = (typeof CARDS)[number]
+/** A user-written card; limits match stats-service's `validate`. */
+export type Custom = { title: string; text: string }
+export type Entry = Card | Custom
+export const MAX_CUSTOM = 5
 
 export type Profile = {
   slug: string
   githubLogin: string
-  layout: { cards: Card[]; columns: 1 | 2 }
+  layout: { cards: Entry[]; columns: 1 | 2 }
   theme: 'light' | 'dark'
 }
 
