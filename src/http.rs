@@ -198,12 +198,13 @@ async fn spotify_track(st: &AppState, uid: &str) -> Result<Option<Track>, String
 
 // ---- public svg ----------------------------------------------------------
 
-fn svg(status: StatusCode, body: String, max_age: u32) -> Response {
+fn svg(status: StatusCode, body: String) -> Response {
     (
         status,
         [
             (header::CONTENT_TYPE, "image/svg+xml; charset=utf-8".to_string()),
-            (header::CACHE_CONTROL, format!("public, max-age={max_age}")),
+            // GitHub's Camo proxy obeys this; no-cache makes README edits show on next load.
+            (header::CACHE_CONTROL, "no-cache, max-age=0".to_string()),
             // Opened directly in a browser, the SVG can never run script.
             (header::CONTENT_SECURITY_POLICY, "default-src 'none'; img-src data:; style-src 'unsafe-inline'".to_string()),
         ],
@@ -218,12 +219,12 @@ pub async fn card(State(st): State<AppState>, Path(file): Path<String>) -> Respo
         Ok(Some(p)) => p,
         Ok(None) => {
             let body = render::compose(&[Data::Error(Card::Github, "no such profile")], Theme::Light, 1);
-            return svg(StatusCode::NOT_FOUND, body, 300);
+            return svg(StatusCode::NOT_FOUND, body);
         }
         Err(e) => {
             tracing::error!("profile_by_slug: {e}");
             let body = render::compose(&[Data::Error(Card::Github, "try again later")], Theme::Light, 1);
-            return svg(StatusCode::SERVICE_UNAVAILABLE, body, 60);
+            return svg(StatusCode::SERVICE_UNAVAILABLE, body);
         }
     };
     let cards = &profile.layout.cards;
@@ -255,8 +256,7 @@ pub async fn card(State(st): State<AppState>, Path(file): Path<String>) -> Respo
             (Card::Streak, Ok(d), _) => Data::Streak(d),
         })
         .collect();
-    let max_age = if cards.contains(&Card::Spotify) { 60 } else { 3600 };
-    svg(StatusCode::OK, render::compose(&data, profile.theme, profile.layout.columns), max_age)
+    svg(StatusCode::OK, render::compose(&data, profile.theme, profile.layout.columns))
 }
 
 #[cfg(test)]
