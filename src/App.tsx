@@ -5,6 +5,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { api, CARDS, MAX_CUSTOM, svgUrl, type Card, type Custom, type Entry, type Profile } from '@/lib/api'
 import { userManager } from '@/lib/auth'
 
@@ -131,140 +132,158 @@ export default function App() {
         </Button>
       </header>
 
-      <form
-        className="grid gap-6"
-        onSubmit={(e) => {
-          e.preventDefault()
-          save()
-        }}
-      >
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="grid gap-2">
-            <Label htmlFor="slug">Page name</Label>
-            <Input id="slug" value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="your-name" required />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="github">GitHub username</Label>
-            <Input id="github" value={githubLogin} onChange={(e) => setGithubLogin(e.target.value)} placeholder="octocat" />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="theme">Theme</Label>
-            <NativeSelect id="theme" value={theme} onChange={(e) => setTheme(e.target.value as Profile['theme'])}>
-              <NativeSelectOption value="light">Light</NativeSelectOption>
-              <NativeSelectOption value="dark">Dark</NativeSelectOption>
-            </NativeSelect>
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="columns">Columns</Label>
-            <NativeSelect id="columns" value={columns} onChange={(e) => setColumns(Number(e.target.value) as 1 | 2)}>
-              <NativeSelectOption value={1}>1</NativeSelectOption>
-              <NativeSelectOption value={2}>2</NativeSelectOption>
-            </NativeSelect>
-          </div>
-        </div>
-
-        <fieldset className="grid gap-2">
-          <legend className="mb-2 text-sm font-medium">Cards</legend>
-          <ul className="grid gap-2">
-            {items.map((x, i) => {
-              const name = typeof x.entry === 'string' ? LABELS[x.entry] : x.entry.title || 'custom card'
-              const arrows = (
-                <>
-                  <Button type="button" size="icon" variant="ghost" aria-label={`Move ${name} up`} disabled={i === 0} onClick={() => move(i, -1)}>
-                    <ArrowUpIcon />
-                  </Button>
-                  <Button type="button" size="icon" variant="ghost" aria-label={`Move ${name} down`} disabled={i === items.length - 1} onClick={() => move(i, 1)}>
-                    <ArrowDownIcon />
-                  </Button>
-                </>
-              )
-              if (typeof x.entry === 'string')
-                return (
-                  <li key={x.key} className="flex items-center gap-3 rounded-lg border px-3 py-2">
-                    <Checkbox id={`card-${x.key}`} checked={x.on} onCheckedChange={(on) => update(x.key, { on })} />
-                    <Label htmlFor={`card-${x.key}`} className="flex-1">
-                      {name}
-                    </Label>
-                    {arrows}
-                  </li>
-                )
-              const c = x.entry
-              return (
-                <li key={x.key} className="flex items-start gap-3 rounded-lg border px-3 py-2">
-                  <div className="grid flex-1 gap-2">
-                    <Input
-                      aria-label="Card title"
-                      placeholder="Title"
-                      maxLength={38}
-                      required
-                      value={c.title}
-                      onChange={(e) => update(x.key, { entry: { ...c, title: e.target.value } })}
-                    />
-                    <textarea
-                      aria-label={`Text for ${name}`}
-                      placeholder="Text"
-                      maxLength={280}
-                      rows={3}
-                      className={TEXTAREA}
-                      value={c.text}
-                      onChange={(e) => update(x.key, { entry: { ...c, text: e.target.value } })}
-                    />
-                  </div>
-                  {arrows}
-                  <Button type="button" size="icon" variant="ghost" aria-label={`Delete ${name}`} onClick={() => setItems((xs) => xs.filter((y) => y.key !== x.key))}>
-                    <Trash2Icon />
-                  </Button>
-                </li>
-              )
-            })}
-          </ul>
-          <Button
-            type="button"
-            variant="outline"
-            className="justify-self-start"
-            disabled={customCount >= MAX_CUSTOM}
-            onClick={() => setItems((xs) => [...xs, custom({ title: '', text: '' })])}
-          >
-            <PlusIcon /> Add custom card
-          </Button>
-        </fieldset>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <Button type="submit" disabled={busy}>
-            Save
-          </Button>
-          {spotifyLinked ? (
-            <Button type="button" variant="outline" disabled={busy} onClick={unlinkSpotify}>
-              Disconnect Spotify
-            </Button>
-          ) : (
-            <Button type="button" variant="outline" disabled={busy} onClick={linkSpotify}>
-              Connect Spotify
-            </Button>
-          )}
+      {(notice || error) && (
+        <div className="grid gap-1">
           <p role="status" className="text-sm text-muted-foreground">
             {notice}
           </p>
+          {error && (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
         </div>
-        {error && (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
-        )}
-      </form>
-
-      {saved && (
-        <section className="grid gap-3">
-          <h2 className="text-lg font-semibold">Your README link</h2>
-          <div className="flex gap-2">
-            <Input readOnly value={snippet} aria-label="Markdown snippet" onFocus={(e) => e.target.select()} />
-            <Button type="button" variant="outline" onClick={() => navigator.clipboard.writeText(snippet).then(() => setNotice('Copied.'))}>
-              <CopyIcon /> Copy
-            </Button>
-          </div>
-          <img src={`${svgUrl(saved.slug)}?v=${saved.at}`} alt="Preview of your stats cards" className="max-w-full" />
-        </section>
       )}
+
+      <Tabs defaultValue="editor">
+        <TabsList>
+          <TabsTrigger value="editor">Editor</TabsTrigger>
+          <TabsTrigger value="preview">Preview</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="editor">
+          <form
+            className="grid gap-6"
+            onSubmit={(e) => {
+              e.preventDefault()
+              save()
+            }}
+          >
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-2">
+                <Label htmlFor="slug">Page name</Label>
+                <Input id="slug" value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="your-name" required />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="github">GitHub username</Label>
+                <Input id="github" value={githubLogin} onChange={(e) => setGithubLogin(e.target.value)} placeholder="octocat" />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="theme">Theme</Label>
+                <NativeSelect id="theme" value={theme} onChange={(e) => setTheme(e.target.value as Profile['theme'])}>
+                  <NativeSelectOption value="light">Light</NativeSelectOption>
+                  <NativeSelectOption value="dark">Dark</NativeSelectOption>
+                </NativeSelect>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="columns">Columns</Label>
+                <NativeSelect id="columns" value={columns} onChange={(e) => setColumns(Number(e.target.value) as 1 | 2)}>
+                  <NativeSelectOption value={1}>1</NativeSelectOption>
+                  <NativeSelectOption value={2}>2</NativeSelectOption>
+                </NativeSelect>
+              </div>
+            </div>
+    
+            <fieldset className="grid gap-2">
+              <legend className="mb-2 text-sm font-medium">Cards</legend>
+              <ul className="grid gap-2">
+                {items.map((x, i) => {
+                  const name = typeof x.entry === 'string' ? LABELS[x.entry] : x.entry.title || 'custom card'
+                  const arrows = (
+                    <>
+                      <Button type="button" size="icon" variant="ghost" aria-label={`Move ${name} up`} disabled={i === 0} onClick={() => move(i, -1)}>
+                        <ArrowUpIcon />
+                      </Button>
+                      <Button type="button" size="icon" variant="ghost" aria-label={`Move ${name} down`} disabled={i === items.length - 1} onClick={() => move(i, 1)}>
+                        <ArrowDownIcon />
+                      </Button>
+                    </>
+                  )
+                  if (typeof x.entry === 'string')
+                    return (
+                      <li key={x.key} className="flex items-center gap-3 rounded-lg border px-3 py-2">
+                        <Checkbox id={`card-${x.key}`} checked={x.on} onCheckedChange={(on) => update(x.key, { on })} />
+                        <Label htmlFor={`card-${x.key}`} className="flex-1">
+                          {name}
+                        </Label>
+                        {arrows}
+                      </li>
+                    )
+                  const c = x.entry
+                  return (
+                    <li key={x.key} className="flex items-start gap-3 rounded-lg border px-3 py-2">
+                      <div className="grid flex-1 gap-2">
+                        <Input
+                          aria-label="Card title"
+                          placeholder="Title"
+                          maxLength={38}
+                          required
+                          value={c.title}
+                          onChange={(e) => update(x.key, { entry: { ...c, title: e.target.value } })}
+                        />
+                        <textarea
+                          aria-label={`Text for ${name}`}
+                          placeholder="Text"
+                          maxLength={280}
+                          rows={3}
+                          className={TEXTAREA}
+                          value={c.text}
+                          onChange={(e) => update(x.key, { entry: { ...c, text: e.target.value } })}
+                        />
+                      </div>
+                      {arrows}
+                      <Button type="button" size="icon" variant="ghost" aria-label={`Delete ${name}`} onClick={() => setItems((xs) => xs.filter((y) => y.key !== x.key))}>
+                        <Trash2Icon />
+                      </Button>
+                    </li>
+                  )
+                })}
+              </ul>
+              <Button
+                type="button"
+                variant="outline"
+                className="justify-self-start"
+                disabled={customCount >= MAX_CUSTOM}
+                onClick={() => setItems((xs) => [...xs, custom({ title: '', text: '' })])}
+              >
+                <PlusIcon /> Add custom card
+              </Button>
+            </fieldset>
+    
+            <div className="flex flex-wrap items-center gap-3">
+              <Button type="submit" disabled={busy}>
+                Save
+              </Button>
+              {spotifyLinked ? (
+                <Button type="button" variant="outline" disabled={busy} onClick={unlinkSpotify}>
+                  Disconnect Spotify
+                </Button>
+              ) : (
+                <Button type="button" variant="outline" disabled={busy} onClick={linkSpotify}>
+                  Connect Spotify
+                </Button>
+              )}
+            </div>
+          </form>
+        </TabsContent>
+
+        <TabsContent value="preview">
+          {saved ? (
+            <section className="grid gap-3">
+              <h2 className="text-lg font-semibold">Your README link</h2>
+              <div className="flex gap-2">
+                <Input readOnly value={snippet} aria-label="Markdown snippet" onFocus={(e) => e.target.select()} />
+                <Button type="button" variant="outline" onClick={() => navigator.clipboard.writeText(snippet).then(() => setNotice('Copied.'))}>
+                  <CopyIcon /> Copy
+                </Button>
+              </div>
+              <img src={`${svgUrl(saved.slug)}?v=${saved.at}`} alt="Preview of your stats cards" className="max-w-full" />
+            </section>
+          ) : (
+            <p className="text-sm text-muted-foreground">Save your cards to see a preview.</p>
+          )}
+        </TabsContent>
+      </Tabs>
     </main>
   )
 }
