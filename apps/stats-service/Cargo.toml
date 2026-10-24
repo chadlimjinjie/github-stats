@@ -1,0 +1,26 @@
+[package]
+name = "stats-service"
+version = "1.0.0"
+edition = "2021"
+description = "Midtone stats: composite GitHub + Spotify README cards as SVG"
+
+[[bin]]
+name = "stats-service"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.8", features = ["json", "query"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+jsonwebtoken = "9"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "json"] }
+aes-gcm = "0.10"
+base64 = "0.22"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dotenvy = "0.15"
+
+[profile.release]
+opt-level = 3
