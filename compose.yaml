@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      # not published to the host: only reachable from this compose network
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: stats
+    volumes: [db-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD, pg_isready, -U, postgres, -d, stats]
+      interval: 2s
+      retries: 15
+
+  # Fronted by midtone's gateway (/stats/* -> host:4106), which adds CORS.
+  # Tokens are checked against midtone auth, so midtone's compose must be up.
+  stats:
+    build: apps/stats-service
+    ports:
+      - 4106:4106
+    extra_hosts: [host.docker.internal:host-gateway]
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db/stats
+      # midtone's gateway; JWKS is read from <this>/auth/t/<tenant>/jwks
+      AUTH_SERVICE_URL: ${AUTH_SERVICE_URL:-http://host.docker.internal:9080}
+      AUTH_TENANT: ${MIDTONE_TENANT:-midtone}
+      # unset: GitHub cards render "unavailable"
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
+      SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
+      # Spotify rejects "localhost" redirect URIs; register this exact one in the Spotify app
+      SPOTIFY_REDIRECT_URI: ${SPOTIFY_REDIRECT_URI:-http://127.0.0.1:9080/stats/spotify/callback}
+      # 64 hex chars; required to link Spotify
+      STATS_ENCRYPTION_KEY: ${STATS_ENCRYPTION_KEY:-}
+      WEB_STATS_URL: ${WEB_STATS_URL:-http://localhost:5177}
+    depends_on:
+      db: { condition: service_healthy }
+
+volumes:
+  db-data:
