@@ -10,7 +10,8 @@ export const MAX_CUSTOM = 5
 export type Profile = {
   slug: string
   githubLogin: string
-  layout: { cards: Entry[]; columns: 1 | 2 }
+  // `wide[i]`: card i spans both columns; missing on profiles saved before it existed.
+  layout: { cards: Entry[]; columns: 1 | 2; wide?: boolean[] }
   theme: 'light' | 'dark'
 }
 

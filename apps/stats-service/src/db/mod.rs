@@ -39,6 +39,9 @@ pub enum Theme {
 pub struct Layout {
     pub cards: Vec<Item>,
     pub columns: u8,
+    /// Per card: spans both columns. Parallel to `cards`; missing in rows saved before it existed.
+    #[serde(default)]
+    pub wide: Vec<bool>,
 }
 
 #[derive(Clone, Debug, Serialize)]

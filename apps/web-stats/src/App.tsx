@@ -1,5 +1,8 @@
-import { useEffect, useState } from 'react'
-import { ArrowDownIcon, ArrowUpIcon, CopyIcon, PlusIcon, Trash2Icon } from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { closestCenter, DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
+import { arrayMove, rectSortingStrategy, SortableContext, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+import { CopyIcon, GripVerticalIcon, PlusIcon, RectangleHorizontalIcon, Trash2Icon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -8,6 +11,7 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { api, CARDS, MAX_CUSTOM, svgUrl, type Card, type Custom, type Entry, type Profile } from '@/lib/api'
 import { userManager } from '@/lib/auth'
+import { cn } from '@/lib/utils'
 
 const LABELS: Record<Card, string> = {
   github: 'GitHub stats',
@@ -17,15 +21,30 @@ const LABELS: Record<Card, string> = {
 }
 
 // `key` is only a React key: the card name, or a random id for custom cards (always on).
-type Item = { key: string; on: boolean; entry: Entry }
+// `wide`: spans both columns when the layout has 2.
+type Item = { key: string; on: boolean; wide: boolean; entry: Entry }
 
-const custom = (entry: Custom): Item => ({ key: crypto.randomUUID(), on: true, entry })
+const custom = (entry: Custom, wide = false): Item => ({ key: crypto.randomUUID(), on: true, wide, entry })
 
 /** Saved cards first, in their order, then the unused built-ins switched off. */
-const toItems = (cards: Entry[]): Item[] => [
-  ...cards.map((entry) => (typeof entry === 'string' ? { key: entry, on: true, entry } : custom(entry))),
-  ...CARDS.filter((c) => !cards.includes(c)).map((card) => ({ key: card, on: false, entry: card })),
+const toItems = (cards: Entry[], wide: boolean[] = []): Item[] => [
+  ...cards.map((entry, i) => (typeof entry === 'string' ? { key: entry, on: true, wide: !!wide[i], entry } : custom(entry, !!wide[i]))),
+  ...CARDS.filter((c) => !cards.includes(c)).map((card) => ({ key: card, on: false, wide: false, entry: card })),
 ]
+
+/** A grid cell dragged only by the handle it passes to `children`, so its inputs stay typeable. */
+function SortableCard({ id, label, className, children }: { id: string; label: string; className: string; children: (handle: ReactNode) => ReactNode }) {
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id })
+  return (
+    <li ref={setNodeRef} style={{ transform: CSS.Translate.toString(transform), transition }} className={cn(className, 'bg-background', isDragging && 'z-10 shadow-lg')}>
+      {children(
+        <Button type="button" size="icon" variant="ghost" ref={setActivatorNodeRef} className="cursor-grab touch-none" {...attributes} {...listeners} aria-label={`Drag ${label}`}>
+          <GripVerticalIcon />
+        </Button>,
+      )}
+    </li>
+  )
+}
 
 const TEXTAREA =
   'w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30'
@@ -59,7 +78,7 @@ export default function App() {
           setGithubLogin(profile.githubLogin)
           setTheme(profile.theme)
           setColumns(profile.layout.columns)
-          setItems(toItems(profile.layout.cards))
+          setItems(toItems(profile.layout.cards, profile.layout.wide))
           setSaved({ slug: profile.slug, at: Date.now() })
         }
       })
@@ -70,12 +89,15 @@ export default function App() {
   const update = (key: string, patch: Partial<Item>) => setItems((xs) => xs.map((y) => (y.key === key ? { ...y, ...patch } : y)))
   const customCount = items.filter((x) => typeof x.entry !== 'string').length
 
-  const move = (i: number, by: -1 | 1) =>
-    setItems((xs) => {
-      const next = [...xs]
-      ;[next[i], next[i + by]] = [next[i + by], next[i]]
-      return next
-    })
+  const sensors = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }))
+  const onDragEnd = ({ active, over }: DragEndEvent) => {
+    if (over && active.id !== over.id)
+      setItems((xs) => arrayMove(xs, xs.findIndex((x) => x.key === active.id), xs.findIndex((x) => x.key === over.id)))
+  }
+  // Only switched-on cards sit in the grid, so its gaps match the rendered SVG.
+  const shown = items.filter((x) => x.on)
+  // Switching a card on puts it at the end of the grid.
+  const turnOn = (key: string) => setItems((xs) => [...xs.filter((y) => y.key !== key), { ...xs.find((y) => y.key === key)!, on: true }])
 
   async function run(fn: () => Promise<void>) {
     setBusy(true)
@@ -96,7 +118,7 @@ export default function App() {
         slug,
         githubLogin,
         theme,
-        layout: { columns, cards: items.filter((x) => x.on).map((x) => x.entry) },
+        layout: { columns, cards: shown.map((x) => x.entry), wide: shown.map((x) => x.wide) },
       }
       const p = await api<Profile>('/me', { method: 'PUT', body: JSON.stringify(body) })
       setSlug(p.slug)
@@ -186,59 +208,93 @@ export default function App() {
     
             <fieldset className="grid gap-2">
               <legend className="mb-2 text-sm font-medium">Cards</legend>
-              <ul className="grid gap-2">
-                {items.map((x, i) => {
-                  const name = typeof x.entry === 'string' ? LABELS[x.entry] : x.entry.title || 'custom card'
-                  const arrows = (
-                    <>
-                      <Button type="button" size="icon" variant="ghost" aria-label={`Move ${name} up`} disabled={i === 0} onClick={() => move(i, -1)}>
-                        <ArrowUpIcon />
-                      </Button>
-                      <Button type="button" size="icon" variant="ghost" aria-label={`Move ${name} down`} disabled={i === items.length - 1} onClick={() => move(i, 1)}>
-                        <ArrowDownIcon />
-                      </Button>
-                    </>
-                  )
-                  if (typeof x.entry === 'string')
-                    return (
-                      <li key={x.key} className="flex items-center gap-3 rounded-lg border px-3 py-2">
-                        <Checkbox id={`card-${x.key}`} checked={x.on} onCheckedChange={(on) => update(x.key, { on })} />
-                        <Label htmlFor={`card-${x.key}`} className="flex-1">
-                          {name}
-                        </Label>
-                        {arrows}
-                      </li>
-                    )
-                  const c = x.entry
-                  return (
-                    <li key={x.key} className="flex items-start gap-3 rounded-lg border px-3 py-2">
-                      <div className="grid flex-1 gap-2">
-                        <Input
-                          aria-label="Card title"
-                          placeholder="Title"
-                          maxLength={38}
-                          required
-                          value={c.title}
-                          onChange={(e) => update(x.key, { entry: { ...c, title: e.target.value } })}
-                        />
-                        <textarea
-                          aria-label={`Text for ${name}`}
-                          placeholder="Text"
-                          maxLength={280}
-                          rows={3}
-                          className={TEXTAREA}
-                          value={c.text}
-                          onChange={(e) => update(x.key, { entry: { ...c, text: e.target.value } })}
-                        />
-                      </div>
-                      {arrows}
-                      <Button type="button" size="icon" variant="ghost" aria-label={`Delete ${name}`} onClick={() => setItems((xs) => xs.filter((y) => y.key !== x.key))}>
-                        <Trash2Icon />
-                      </Button>
-                    </li>
-                  )
-                })}
-              </ul>
+              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+                <SortableContext items={shown.map((x) => x.key)} strategy={rectSortingStrategy}>
+                  <ul className={cn('grid gap-2', columns === 2 && 'sm:grid-cols-2')}>
+                    {shown.map((x) => {
+                      const name = typeof x.entry === 'string' ? LABELS[x.entry] : x.entry.title || 'custom card'
+                      const widen = columns === 2 && (
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant={x.wide ? 'secondary' : 'ghost'}
+                          className="max-sm:hidden"
+                          aria-label={`Span ${name} across both columns`}
+                          aria-pressed={x.wide}
+                          onClick={() => update(x.key, { wide: !x.wide })}
+                        >
+                          <RectangleHorizontalIcon />
+                        </Button>
+                      )
+                      const cell = cn('flex gap-2 rounded-lg border px-3 py-2', columns === 2 && x.wide && 'sm:col-span-2')
+                      if (typeof x.entry === 'string')
+                        return (
+                          <SortableCard key={x.key} id={x.key} label={name} className={cn(cell, 'items-center')}>
+                            {(handle) => (
+                              <>
+                                {handle}
+                                <Checkbox id={`card-${x.key}`} checked onCheckedChange={() => update(x.key, { on: false })} />
+                                <Label htmlFor={`card-${x.key}`} className="flex-1">
+                                  {name}
+                                </Label>
+                                {widen}
+                              </>
+                            )}
+                          </SortableCard>
+                        )
+                      const c = x.entry
+                      return (
+                        <SortableCard key={x.key} id={x.key} label={name} className={cn(cell, 'items-start')}>
+                          {(handle) => (
+                            <>
+                              {handle}
+                              <div className="grid min-w-0 flex-1 gap-2">
+                                <Input
+                                  aria-label="Card title"
+                                  placeholder="Title"
+                                  maxLength={38}
+                                  required
+                                  value={c.title}
+                                  onChange={(e) => update(x.key, { entry: { ...c, title: e.target.value } })}
+                                />
+                                <textarea
+                                  aria-label={`Text for ${name}`}
+                                  placeholder="Text"
+                                  maxLength={280}
+                                  rows={3}
+                                  className={TEXTAREA}
+                                  value={c.text}
+                                  onChange={(e) => update(x.key, { entry: { ...c, text: e.target.value } })}
+                                />
+                              </div>
+                              <div className="grid">
+                                {widen}
+                                <Button type="button" size="icon" variant="ghost" aria-label={`Delete ${name}`} onClick={() => setItems((xs) => xs.filter((y) => y.key !== x.key))}>
+                                  <Trash2Icon />
+                                </Button>
+                              </div>
+                            </>
+                          )}
+                        </SortableCard>
+                      )
+                    })}
+                  </ul>
+                </SortableContext>
+              </DndContext>
+              {items.some((x) => !x.on) && (
+                <ul className="flex flex-wrap gap-2" aria-label="Cards not shown">
+                  {items.map(
+                    (x) =>
+                      !x.on &&
+                      typeof x.entry === 'string' && (
+                        <li key={x.key} className="flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-muted-foreground">
+                          <Checkbox id={`card-${x.key}`} checked={false} onCheckedChange={() => turnOn(x.key)} />
+                          <Label htmlFor={`card-${x.key}`}>{LABELS[x.entry]}</Label>
+                        </li>
+                      ),
+                  )}
+                </ul>
+              )}
               <Button
                 type="button"
                 variant="outline"

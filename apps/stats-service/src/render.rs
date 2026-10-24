@@ -1,5 +1,5 @@
-//! SVG cards as plain string templates. Each card is (height, inner svg) at a fixed width;
-//! `compose` places them in a 1- or 2-column grid inside one root `<svg>`.
+//! SVG cards as plain string templates. Each card is (height, inner svg) at a given width;
+//! `compose` places them in a 1- or 2-column grid (cards 1 or 2 columns wide) inside one root `<svg>`.
 //! All remote/user text goes through `esc`.
 
 use std::fmt::Write;
@@ -88,20 +88,20 @@ fn github(d: &GithubData, p: &Palette) -> (u32, String) {
     (195, s)
 }
 
-fn languages(d: &GithubData) -> (u32, String) {
+fn languages(d: &GithubData, w: u32) -> (u32, String) {
     let mut s = title("Most Used Languages");
     let total: u64 = d.languages.iter().map(|l| l.2).sum();
     if total == 0 {
         s.push_str(r#"<text x="25" y="70" class="m">No languages found</text>"#);
         return (95, s);
     }
-    let bar = (W - 50) as f64;
+    let bar = (w - 50) as f64;
     let mut x = 25.0;
-    s.push_str(r#"<clipPath id="lbar"><rect x="25" y="52" width="370" height="8" rx="4"/></clipPath><g clip-path="url(#lbar)">"#);
+    let _ = write!(s, r#"<clipPath id="lbar"><rect x="25" y="52" width="{bar}" height="8" rx="4"/></clipPath><g clip-path="url(#lbar)">"#);
     for (_, colour, size) in &d.languages {
-        let w = bar * *size as f64 / total as f64;
-        let _ = write!(s, r#"<rect x="{x:.2}" y="52" width="{w:.2}" height="8" fill="{}"/>"#, esc(colour));
-        x += w;
+        let seg = bar * *size as f64 / total as f64;
+        let _ = write!(s, r#"<rect x="{x:.2}" y="52" width="{seg:.2}" height="8" fill="{}"/>"#, esc(colour));
+        x += seg;
     }
     s.push_str("</g>");
     for (i, (name, colour, size)) in d.languages.iter().enumerate() {
@@ -121,7 +121,7 @@ fn languages(d: &GithubData) -> (u32, String) {
     (88 + 24 * rows, s)
 }
 
-fn streak(d: &GithubData) -> (u32, String) {
+fn streak(d: &GithubData, w: u32) -> (u32, String) {
     let mut s = title("Contribution Streak");
     let cols = [
         (fmt_num(d.streak.total), "Contributions"),
@@ -129,7 +129,7 @@ fn streak(d: &GithubData) -> (u32, String) {
         (d.streak.longest.to_string(), "Longest Streak"),
     ];
     for (i, (value, label)) in cols.iter().enumerate() {
-        let x = W / 6 + i as u32 * W / 3;
+        let x = w / 6 + i as u32 * w / 3;
         let _ = write!(s, r#"<text x="{x}" y="88" text-anchor="middle" class="big">{value}</text><text x="{x}" y="115" text-anchor="middle" class="m">{label}</text>"#);
     }
     (140, s)
@@ -201,9 +201,9 @@ fn wrap(text: &str, max: usize, lines: usize) -> Vec<String> {
     out
 }
 
-fn custom(heading: &str, text: &str) -> (u32, String) {
+fn custom(heading: &str, text: &str, w: u32) -> (u32, String) {
     let mut s = title(heading);
-    let lines = wrap(text, WRAP_CHARS, MAX_LINES);
+    let lines = wrap(text, WRAP_CHARS * w as usize / W as usize, MAX_LINES);
     for (i, line) in lines.iter().enumerate() {
         let _ = write!(s, r#"<text x="25" y="{}" class="l">{}</text>"#, 65 + 20 * i as u32, esc(line));
     }
@@ -220,38 +220,50 @@ fn error(card: Card, msg: &str) -> (u32, String) {
     (80, format!(r#"{}<text x="25" y="60" class="m">Unavailable: {}</text>"#, title(name), clip(msg, 48)))
 }
 
-pub fn compose(cards: &[Data], theme: Theme, columns: u8) -> String {
+/// `wide[i]` makes card i span both columns (ignored with 1 column). A wide card never
+/// starts in the right column: it moves to the next row and leaves that slot empty.
+pub fn compose(cards: &[Data], wide: &[bool], theme: Theme, columns: u8) -> String {
     let p = palette(theme);
-    let cols: usize = if columns == 2 { 2 } else { 1 };
-    let rendered: Vec<(u32, String)> = cards
-        .iter()
-        .enumerate()
-        .map(|(i, c)| match c {
+    let cols: u32 = if columns == 2 { 2 } else { 1 };
+    // Each row holds (width, height, inner svg) per card.
+    let mut rows: Vec<Vec<(u32, u32, String)>> = Vec::new();
+    let mut used = cols;
+    for (i, c) in cards.iter().enumerate() {
+        let span = if cols == 2 && wide.get(i) == Some(&true) { 2 } else { 1 };
+        let w = span * W + (span - 1) * GAP;
+        let (h, inner) = match c {
             Data::Github(d) => github(d, &p),
-            Data::Languages(d) => languages(d),
-            Data::Streak(d) => streak(d),
+            Data::Languages(d) => languages(d, w),
+            Data::Streak(d) => streak(d, w),
             Data::Spotify(t) => spotify(*t, i),
-            Data::Custom(t, text) => custom(t, text),
+            Data::Custom(t, text) => custom(t, text, w),
             Data::Error(card, msg) => error(*card, msg),
-        })
-        .collect();
+        };
+        if used + span > cols {
+            rows.push(Vec::new());
+            used = 0;
+        }
+        rows.last_mut().expect("row pushed above").push((w, h, inner));
+        used += span;
+    }
 
     let mut body = String::new();
-    let mut y = 0;
-    for row in rendered.chunks(cols) {
-        let row_h = row.iter().map(|c| c.0).max().unwrap_or(0);
-        for (i, (h, inner)) in row.iter().enumerate() {
-            let x = i as u32 * (W + GAP);
+    let (mut y, mut width) = (0, W);
+    for row in &rows {
+        let row_h = row.iter().map(|c| c.1).max().unwrap_or(0);
+        let mut x = 0;
+        for (w, h, inner) in row {
             let _ = write!(
                 body,
-                r#"<svg x="{x}" y="{y}" width="{W}" height="{row_h}"><rect x="0.5" y="0.5" width="{}" height="{}" rx="6" class="card"/>{inner}</svg>"#,
-                W - 1,
+                r#"<svg x="{x}" y="{y}" width="{w}" height="{row_h}"><rect x="0.5" y="0.5" width="{}" height="{}" rx="6" class="card"/>{inner}</svg>"#,
+                w - 1,
                 h - 1,
             );
+            x += w + GAP;
         }
+        width = width.max(x - GAP);
         y += row_h + GAP;
     }
-    let width = cols.min(rendered.len().max(1)) as u32 * (W + GAP) - GAP;
     let height = y.saturating_sub(GAP).max(1);
     format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}"><style>
@@ -297,7 +309,7 @@ mod tests {
     fn escapes_text() {
         assert_eq!(esc(r#"<a href="x">&'"#), "&lt;a href=&quot;x&quot;&gt;&amp;&#39;");
         let d = data();
-        let svg = compose(&[Data::Github(&d)], Theme::Light, 1);
+        let svg = compose(&[Data::Github(&d)], &[], Theme::Light, 1);
         assert!(!svg.contains("<script>"));
         assert!(svg.contains("&lt;script&gt;"));
         assert!(svg.contains("1.5k"));
@@ -306,12 +318,20 @@ mod tests {
     #[test]
     fn grid_dimensions() {
         let d = data();
-        let one = compose(&[Data::Github(&d), Data::Streak(&d)], Theme::Dark, 1);
+        let one = compose(&[Data::Github(&d), Data::Streak(&d)], &[], Theme::Dark, 1);
         assert!(one.contains(r#"width="420" height="345""#), "{one}"); // 195 + 10 + 140
-        let two = compose(&[Data::Github(&d), Data::Streak(&d), Data::Error(Card::Spotify, "x")], Theme::Dark, 2);
+        let two = compose(&[Data::Github(&d), Data::Streak(&d), Data::Error(Card::Spotify, "x")], &[], Theme::Dark, 2);
         assert!(two.contains(r#"width="850" height="285""#)); // row max 195 + 10 + 80
-        let lone = compose(&[Data::Spotify(None)], Theme::Light, 2);
+        let lone = compose(&[Data::Spotify(None)], &[], Theme::Light, 2);
         assert!(lone.contains(r#"width="420" height="80""#));
+        // narrow | gap, then wide, then narrow narrow
+        let e = |m| Data::Error(Card::Spotify, m);
+        let mixed = compose(&[e("a"), Data::Streak(&d), e("b"), e("c")], &[false, true], Theme::Light, 2);
+        assert!(mixed.contains(r#"width="850" height="320""#), "{mixed}"); // 80 + 10 + 140 + 10 + 80
+        assert!(mixed.contains(r#"<svg x="0" y="90" width="850" height="140">"#));
+        assert!(mixed.contains(r#"<svg x="430" y="240" width="420" height="80">"#));
+        let stacked = compose(&[e("a"), Data::Streak(&d)], &[true, true], Theme::Light, 1);
+        assert!(stacked.contains(r#"width="420" height="230""#), "{stacked}");
     }
 
     #[test]
@@ -329,7 +349,7 @@ b", 5, 3), ["a", "", "b"]);
     #[test]
     fn custom_card() {
         let svg = compose(&[Data::Custom("<b>Me</b>", "hi <script>
-there")], Theme::Light, 1);
+there")], &[], Theme::Light, 1);
         assert!(!svg.contains("<script>") && !svg.contains("<b>"));
         assert!(svg.contains("hi &lt;script&gt;"));
         assert!(svg.contains(r#"width="420" height="95""#), "{svg}"); // 55 + 2 lines

@@ -110,14 +110,22 @@ fn validate(b: &mut PutBody) -> Result<(), &'static str> {
     if !matches!(b.layout.columns, 1 | 2) {
         return Err("Columns must be 1 or 2");
     }
+    // Drop duplicate built-ins together with their `wide` flag so the flags stay aligned.
+    let layout = &mut b.layout;
+    layout.wide.resize(layout.cards.len(), false);
     let mut seen = Vec::new();
-    b.layout.cards.retain(|c| match c {
-        Item::Card(c) => !seen.contains(c) && {
-            seen.push(*c);
-            true
-        },
-        Item::Custom { .. } => true,
-    });
+    let (cards, wide) = std::mem::take(&mut layout.cards)
+        .into_iter()
+        .zip(std::mem::take(&mut layout.wide))
+        .filter(|(c, _)| match c {
+            Item::Card(c) => !seen.contains(c) && {
+                seen.push(*c);
+                true
+            },
+            Item::Custom { .. } => true,
+        })
+        .unzip();
+    (layout.cards, layout.wide) = (cards, wide);
     let mut customs = 0;
     for c in &mut b.layout.cards {
         if let Item::Custom { title, text } = c {
@@ -241,12 +249,12 @@ pub async fn card(State(st): State<AppState>, Path(file): Path<String>) -> Respo
     let profile = match db::profile_by_slug(&st.pool, slug).await {
         Ok(Some(p)) => p,
         Ok(None) => {
-            let body = render::compose(&[Data::Error(Card::Github, "no such profile")], Theme::Light, 1);
+            let body = render::compose(&[Data::Error(Card::Github, "no such profile")], &[], Theme::Light, 1);
             return svg(StatusCode::NOT_FOUND, body);
         }
         Err(e) => {
             tracing::error!("profile_by_slug: {e}");
-            let body = render::compose(&[Data::Error(Card::Github, "try again later")], Theme::Light, 1);
+            let body = render::compose(&[Data::Error(Card::Github, "try again later")], &[], Theme::Light, 1);
             return svg(StatusCode::SERVICE_UNAVAILABLE, body);
         }
     };
@@ -275,7 +283,7 @@ pub async fn card(State(st): State<AppState>, Path(file): Path<String>) -> Respo
             Item::Card(c) => builtin(c, &gh, &sp),
         })
         .collect();
-    svg(StatusCode::OK, render::compose(&data, profile.theme, profile.layout.columns))
+    svg(StatusCode::OK, render::compose(&data, &profile.layout.wide, profile.theme, profile.layout.columns))
 }
 
 fn builtin<'a>(c: &Card, gh: &'a Result<GithubData, String>, sp: &'a Result<Option<Track>, String>) -> Data<'a> {
@@ -296,7 +304,7 @@ mod tests {
     const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     fn body(slug: &str, login: &str, cards: Vec<Item>, columns: u8) -> PutBody {
-        PutBody { slug: slug.into(), github_login: login.into(), layout: Layout { cards, columns }, theme: Theme::Light }
+        PutBody { slug: slug.into(), github_login: login.into(), layout: Layout { cards, columns, wide: vec![] }, theme: Theme::Light }
     }
 
     fn custom(title: &str, text: &str) -> Item {
@@ -309,7 +317,12 @@ mod tests {
         let mut b = body(" Chad-1 ", "octo-cat", vec![gh.clone(), custom(" Hi ", "x"), sp.clone(), gh.clone(), custom("Hi", "y")], 2);
         assert!(validate(&mut b).is_ok());
         assert_eq!(b.slug, "chad-1");
-        assert_eq!(b.layout.cards, vec![gh.clone(), custom("Hi", "x"), sp, custom("Hi", "y")]);
+        assert_eq!(b.layout.cards, vec![gh.clone(), custom("Hi", "x"), sp.clone(), custom("Hi", "y")]);
+        assert_eq!(b.layout.wide, [false; 4]);
+        let mut b = body("abc", "", vec![gh.clone(), gh.clone(), sp.clone()], 2);
+        b.layout.wide = vec![false, false, true, true];
+        assert!(validate(&mut b).is_ok());
+        assert_eq!((b.layout.cards, b.layout.wide), (vec![gh.clone(), sp], vec![false, true]));
         assert!(validate(&mut body("abc", "", vec![custom("  ", "x")], 1)).is_err());
         assert!(validate(&mut body("abc", "", vec![custom(&"t".repeat(39), "")], 1)).is_err());
         assert!(validate(&mut body("abc", "", vec![custom("t", &"é".repeat(280))], 1)).is_ok());
