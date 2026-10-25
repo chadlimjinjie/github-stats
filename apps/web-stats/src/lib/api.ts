@@ -30,8 +30,9 @@ export async function shrink(file: File): Promise<string> {
 export type Profile = {
   slug: string
   githubLogin: string
-  // `wide[i]`: card i spans both columns; missing on profiles saved before it existed.
-  layout: { cards: Entry[]; columns: 1 | 2; wide?: boolean[] }
+  // `wide[i]`: card i spans both columns; `borderless[i]`: card i has no outline.
+  // Both are missing on profiles saved before they existed.
+  layout: { cards: Entry[]; columns: 1 | 2; wide?: boolean[]; borderless?: boolean[] }
   theme: 'light' | 'dark'
 }
 

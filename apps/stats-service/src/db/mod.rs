@@ -44,6 +44,9 @@ pub struct Layout {
     /// Per card: spans both columns. Parallel to `cards`; missing in rows saved before it existed.
     #[serde(default)]
     pub wide: Vec<bool>,
+    /// Per card: hide its outline. Parallel to `cards`; missing in rows saved before it existed.
+    #[serde(default)]
+    pub borderless: Vec<bool>,
 }
 
 #[derive(Clone, Debug, Serialize)]

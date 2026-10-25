@@ -4,6 +4,7 @@
 -- One public stats page per midtone user, served at /stats/u/<slug>.svg.
 -- "layout" is {"cards": ["github", "languages", "streak", "spotify", {"title": "..", "text": ".."}], "columns": 1|2},
 -- in display order; objects are user-written custom cards, or {"title": "..", "images": ["data:image/jpeg;base64,.."]} galleries.
+-- "wide" and "borderless" are optional bool arrays parallel to "cards".
 CREATE TABLE IF NOT EXISTS stats_profile (
     "user_id"      text PRIMARY KEY,
     "slug"         text NOT NULL UNIQUE,

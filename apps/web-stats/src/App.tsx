@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { closestCenter, DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { arrayMove, rectSortingStrategy, SortableContext, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { CopyIcon, GripVerticalIcon, ImagePlusIcon, ImagesIcon, PlusIcon, RectangleHorizontalIcon, Trash2Icon, XIcon } from 'lucide-react'
+import { CopyIcon, GripVerticalIcon, ImagePlusIcon, ImagesIcon, PlusIcon, RectangleHorizontalIcon, SquareDashedIcon, SquareIcon, Trash2Icon, XIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -21,15 +21,17 @@ const LABELS: Record<Card, string> = {
 }
 
 // `key` is only a React key: the card name, or a random id for custom cards and galleries (always on).
-// `wide`: spans both columns when the layout has 2.
-type Item = { key: string; on: boolean; wide: boolean; entry: Entry }
+// `wide`: spans both columns when the layout has 2. `border`: draws the card's outline.
+type Item = { key: string; on: boolean; wide: boolean; border: boolean; entry: Entry }
 
-const custom = (entry: Custom | Gallery, wide = false): Item => ({ key: crypto.randomUUID(), on: true, wide, entry })
+const custom = (entry: Custom | Gallery, wide = false, border = true): Item => ({ key: crypto.randomUUID(), on: true, wide, border, entry })
 
 /** Saved cards first, in their order, then the unused built-ins switched off. */
-const toItems = (cards: Entry[], wide: boolean[] = []): Item[] => [
-  ...cards.map((entry, i) => (typeof entry === 'string' ? { key: entry, on: true, wide: !!wide[i], entry } : custom(entry, !!wide[i]))),
-  ...CARDS.filter((c) => !cards.includes(c)).map((card) => ({ key: card, on: false, wide: false, entry: card })),
+const toItems = (cards: Entry[], wide: boolean[] = [], borderless: boolean[] = []): Item[] => [
+  ...cards.map((entry, i) =>
+    typeof entry === 'string' ? { key: entry, on: true, wide: !!wide[i], border: !borderless[i], entry } : custom(entry, !!wide[i], !borderless[i]),
+  ),
+  ...CARDS.filter((c) => !cards.includes(c)).map((card) => ({ key: card, on: false, wide: false, border: true, entry: card })),
 ]
 
 /** A grid cell dragged only by the handle it passes to `children`, so its inputs stay typeable. */
@@ -78,7 +80,7 @@ export default function App() {
           setGithubLogin(profile.githubLogin)
           setTheme(profile.theme)
           setColumns(profile.layout.columns)
-          setItems(toItems(profile.layout.cards, profile.layout.wide))
+          setItems(toItems(profile.layout.cards, profile.layout.wide, profile.layout.borderless))
           setSaved({ slug: profile.slug, at: Date.now() })
         }
       })
@@ -121,7 +123,7 @@ export default function App() {
         slug,
         githubLogin,
         theme,
-        layout: { columns, cards: shown.map((x) => x.entry), wide: shown.map((x) => x.wide) },
+        layout: { columns, cards: shown.map((x) => x.entry), wide: shown.map((x) => x.wide), borderless: shown.map((x) => !x.border) },
       }
       const p = await api<Profile>('/me', { method: 'PUT', body: JSON.stringify(body) })
       setSlug(p.slug)
@@ -223,20 +225,34 @@ export default function App() {
                     {shown.map((x) => {
                       const name =
                         typeof x.entry === 'string' ? LABELS[x.entry] : x.entry.title || ('images' in x.entry ? 'gallery card' : 'custom card')
-                      const widen = columns === 2 && (
-                        <Button
-                          type="button"
-                          size="icon"
-                          variant={x.wide ? 'secondary' : 'ghost'}
-                          className="max-sm:hidden"
-                          aria-label={`Span ${name} across both columns`}
-                          aria-pressed={x.wide}
-                          onClick={() => update(x.key, { wide: !x.wide })}
-                        >
-                          <RectangleHorizontalIcon />
-                        </Button>
+                      const toggles = (
+                        <>
+                          {columns === 2 && (
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant={x.wide ? 'secondary' : 'ghost'}
+                              className="max-sm:hidden"
+                              aria-label={`Span ${name} across both columns`}
+                              aria-pressed={x.wide}
+                              onClick={() => update(x.key, { wide: !x.wide })}
+                            >
+                              <RectangleHorizontalIcon />
+                            </Button>
+                          )}
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant={x.border ? 'ghost' : 'secondary'}
+                            aria-label={`Hide border on ${name}`}
+                            aria-pressed={!x.border}
+                            onClick={() => update(x.key, { border: !x.border })}
+                          >
+                            {x.border ? <SquareIcon /> : <SquareDashedIcon />}
+                          </Button>
+                        </>
                       )
-                      const cell = cn('flex gap-2 rounded-lg border px-3 py-2', columns === 2 && x.wide && 'sm:col-span-2')
+                      const cell = cn('flex gap-2 rounded-lg border px-3 py-2', !x.border && 'border-dashed', columns === 2 && x.wide && 'sm:col-span-2')
                       if (typeof x.entry === 'string')
                         return (
                           <SortableCard key={x.key} id={x.key} label={name} className={cn(cell, 'items-center')}>
@@ -247,7 +263,7 @@ export default function App() {
                                 <Label htmlFor={`card-${x.key}`} className="flex-1">
                                   {name}
                                 </Label>
-                                {widen}
+                                {toggles}
                               </>
                             )}
                           </SortableCard>
@@ -311,7 +327,7 @@ export default function App() {
                                   </ul>
                                 </div>
                                 <div className="grid">
-                                  {widen}
+                                  {toggles}
                                   {remove}
                                 </div>
                               </>
@@ -345,7 +361,7 @@ export default function App() {
                                 />
                               </div>
                               <div className="grid">
-                                {widen}
+                                {toggles}
                                 {remove}
                               </div>
                             </>

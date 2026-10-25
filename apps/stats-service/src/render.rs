@@ -241,11 +241,12 @@ fn error(card: Card, msg: &str) -> (u32, String) {
 
 /// `wide[i]` makes card i span both columns (ignored with 1 column). A wide card never
 /// starts in the right column: it moves to the next row and leaves that slot empty.
-pub fn compose(cards: &[Data], wide: &[bool], theme: Theme, columns: u8) -> String {
+/// `borderless[i]` hides card i's outline but keeps its background.
+pub fn compose(cards: &[Data], wide: &[bool], borderless: &[bool], theme: Theme, columns: u8) -> String {
     let p = palette(theme);
     let cols: u32 = if columns == 2 { 2 } else { 1 };
-    // Each row holds (width, height, inner svg) per card.
-    let mut rows: Vec<Vec<(u32, u32, String)>> = Vec::new();
+    // Each row holds (width, height, class, inner svg) per card.
+    let mut rows: Vec<Vec<(u32, u32, &str, String)>> = Vec::new();
     let mut used = cols;
     for (i, c) in cards.iter().enumerate() {
         let span = if cols == 2 && wide.get(i) == Some(&true) { 2 } else { 1 };
@@ -263,7 +264,8 @@ pub fn compose(cards: &[Data], wide: &[bool], theme: Theme, columns: u8) -> Stri
             rows.push(Vec::new());
             used = 0;
         }
-        rows.last_mut().expect("row pushed above").push((w, h, inner));
+        let class = if borderless.get(i) == Some(&true) { "card nb" } else { "card" };
+        rows.last_mut().expect("row pushed above").push((w, h, class, inner));
         used += span;
     }
 
@@ -272,10 +274,10 @@ pub fn compose(cards: &[Data], wide: &[bool], theme: Theme, columns: u8) -> Stri
     for row in &rows {
         let row_h = row.iter().map(|c| c.1).max().unwrap_or(0);
         let mut x = 0;
-        for (w, h, inner) in row {
+        for (w, h, class, inner) in row {
             let _ = write!(
                 body,
-                r#"<svg x="{x}" y="{y}" width="{w}" height="{row_h}"><rect x="0.5" y="0.5" width="{}" height="{}" rx="6" class="card"/>{inner}</svg>"#,
+                r#"<svg x="{x}" y="{y}" width="{w}" height="{row_h}"><rect x="0.5" y="0.5" width="{}" height="{}" rx="6" class="{class}"/>{inner}</svg>"#,
                 w - 1,
                 h - 1,
             );
@@ -289,6 +291,7 @@ pub fn compose(cards: &[Data], wide: &[bool], theme: Theme, columns: u8) -> Stri
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}"><style>
 text{{font-family:'Segoe UI',Ubuntu,'Helvetica Neue',Arial,sans-serif;fill:{text}}}
 .card{{fill:{bg};stroke:{border}}}
+.nb{{stroke:none}}
 .ph{{fill:{border}}}
 .t{{font-size:18px;font-weight:600;fill:{title}}}
 .l{{font-size:14px}}
@@ -329,7 +332,7 @@ mod tests {
     fn escapes_text() {
         assert_eq!(esc(r#"<a href="x">&'"#), "&lt;a href=&quot;x&quot;&gt;&amp;&#39;");
         let d = data();
-        let svg = compose(&[Data::Github(&d)], &[], Theme::Light, 1);
+        let svg = compose(&[Data::Github(&d)], &[], &[], Theme::Light, 1);
         assert!(!svg.contains("<script>"));
         assert!(svg.contains("&lt;script&gt;"));
         assert!(svg.contains("1.5k"));
@@ -338,19 +341,19 @@ mod tests {
     #[test]
     fn grid_dimensions() {
         let d = data();
-        let one = compose(&[Data::Github(&d), Data::Streak(&d)], &[], Theme::Dark, 1);
+        let one = compose(&[Data::Github(&d), Data::Streak(&d)], &[], &[], Theme::Dark, 1);
         assert!(one.contains(r#"width="420" height="345""#), "{one}"); // 195 + 10 + 140
-        let two = compose(&[Data::Github(&d), Data::Streak(&d), Data::Error(Card::Spotify, "x")], &[], Theme::Dark, 2);
+        let two = compose(&[Data::Github(&d), Data::Streak(&d), Data::Error(Card::Spotify, "x")], &[], &[], Theme::Dark, 2);
         assert!(two.contains(r#"width="850" height="285""#)); // row max 195 + 10 + 80
-        let lone = compose(&[Data::Spotify(None)], &[], Theme::Light, 2);
+        let lone = compose(&[Data::Spotify(None)], &[], &[], Theme::Light, 2);
         assert!(lone.contains(r#"width="420" height="80""#));
         // narrow | gap, then wide, then narrow narrow
         let e = |m| Data::Error(Card::Spotify, m);
-        let mixed = compose(&[e("a"), Data::Streak(&d), e("b"), e("c")], &[false, true], Theme::Light, 2);
+        let mixed = compose(&[e("a"), Data::Streak(&d), e("b"), e("c")], &[false, true], &[], Theme::Light, 2);
         assert!(mixed.contains(r#"width="850" height="320""#), "{mixed}"); // 80 + 10 + 140 + 10 + 80
         assert!(mixed.contains(r#"<svg x="0" y="90" width="850" height="140">"#));
         assert!(mixed.contains(r#"<svg x="430" y="240" width="420" height="80">"#));
-        let stacked = compose(&[e("a"), Data::Streak(&d)], &[true, true], Theme::Light, 1);
+        let stacked = compose(&[e("a"), Data::Streak(&d)], &[true, true], &[], Theme::Light, 1);
         assert!(stacked.contains(r#"width="420" height="230""#), "{stacked}");
     }
 
@@ -369,7 +372,7 @@ b", 5, 3), ["a", "", "b"]);
     #[test]
     fn custom_card() {
         let svg = compose(&[Data::Custom("<b>Me</b>", "hi <script>
-there")], &[], Theme::Light, 1);
+there")], &[], &[], Theme::Light, 1);
         assert!(!svg.contains("<script>") && !svg.contains("<b>"));
         assert!(svg.contains("hi &lt;script&gt;"));
         assert!(svg.contains(r#"width="420" height="95""#), "{svg}"); // 55 + 2 lines
@@ -379,13 +382,22 @@ there")], &[], Theme::Light, 1);
     fn gallery_card() {
         let imgs = vec![r#"data:image/jpeg;base64,"x"#.to_string(); 4];
         // Narrow: tile (420-50-20)/3 = 116, 2 rows, titled: 50 + 2*126 + 15.
-        let svg = compose(&[Data::Gallery("Pics", &imgs)], &[], Theme::Light, 1);
+        let svg = compose(&[Data::Gallery("Pics", &imgs)], &[], &[], Theme::Light, 1);
         assert!(svg.contains(r#"width="420" height="317""#), "{svg}");
         assert!(svg.contains(r#"id="g0-3""#) && svg.contains("base64,&quot;x") && !svg.contains(r#"base64,"x"#));
         // Wide: tile (850-50-50)/6 = 125, 1 row, untitled: 20 + 135 + 15.
-        let wide = compose(&[Data::Gallery("", &imgs)], &[true], Theme::Dark, 2);
+        let wide = compose(&[Data::Gallery("", &imgs)], &[true], &[], Theme::Dark, 2);
         assert!(wide.contains(r#"width="850" height="170""#), "{wide}");
         assert!(!wide.contains(r#"class="t""#));
+    }
+
+    #[test]
+    fn borderless_cards() {
+        let e = |m| Data::Error(Card::Spotify, m);
+        let svg = compose(&[e("a"), e("b")], &[], &[false, true], Theme::Light, 1);
+        assert_eq!(svg.matches(r#"class="card""#).count(), 1);
+        assert_eq!(svg.matches(r#"class="card nb""#).count(), 1);
+        assert!(svg.find(r#"class="card""#) < svg.find(r#"class="card nb""#));
     }
 
     #[test]
