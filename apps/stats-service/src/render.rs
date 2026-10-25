@@ -18,6 +18,8 @@ pub enum Data<'a> {
     Spotify(Option<&'a Track>),
     /// A user's own card: (title, text).
     Custom(&'a str, &'a str),
+    /// (title, JPEG `data:` URIs), validated by http.rs.
+    Gallery(&'a str, &'a [String]),
     Error(Card, &'a str),
 }
 
@@ -210,6 +212,23 @@ fn custom(heading: &str, text: &str, w: u32) -> (u32, String) {
     (55 + 20 * lines.len() as u32, s)
 }
 
+/// Square thumbnails, 3 per row (6 when wide), under an optional title.
+fn gallery(heading: &str, images: &[String], w: u32, id: usize) -> (u32, String) {
+    let n = if w > W { 6 } else { 3 };
+    let tile = (w - 50 - (n - 1) * GAP) / n;
+    let (mut s, top) = if heading.is_empty() { (String::new(), 20) } else { (title(heading), 50) };
+    for (j, uri) in images.iter().enumerate() {
+        let (x, y) = (25 + (j as u32 % n) * (tile + GAP), top + (j as u32 / n) * (tile + GAP));
+        let _ = write!(
+            s,
+            r#"<clipPath id="g{id}-{j}"><rect x="{x}" y="{y}" width="{tile}" height="{tile}" rx="6"/></clipPath><image x="{x}" y="{y}" width="{tile}" height="{tile}" preserveAspectRatio="xMidYMid slice" href="{}" clip-path="url(#g{id}-{j})"/>"#,
+            esc(uri)
+        );
+    }
+    let rows = (images.len() as u32).div_ceil(n);
+    (top + rows * (tile + GAP) + 15, s)
+}
+
 fn error(card: Card, msg: &str) -> (u32, String) {
     let name = match card {
         Card::Github => "GitHub Stats",
@@ -237,6 +256,7 @@ pub fn compose(cards: &[Data], wide: &[bool], theme: Theme, columns: u8) -> Stri
             Data::Streak(d) => streak(d, w),
             Data::Spotify(t) => spotify(*t, i),
             Data::Custom(t, text) => custom(t, text, w),
+            Data::Gallery(t, images) => gallery(t, images, w, i),
             Data::Error(card, msg) => error(*card, msg),
         };
         if used + span > cols {
@@ -353,6 +373,19 @@ there")], &[], Theme::Light, 1);
         assert!(!svg.contains("<script>") && !svg.contains("<b>"));
         assert!(svg.contains("hi &lt;script&gt;"));
         assert!(svg.contains(r#"width="420" height="95""#), "{svg}"); // 55 + 2 lines
+    }
+
+    #[test]
+    fn gallery_card() {
+        let imgs = vec![r#"data:image/jpeg;base64,"x"#.to_string(); 4];
+        // Narrow: tile (420-50-20)/3 = 116, 2 rows, titled: 50 + 2*126 + 15.
+        let svg = compose(&[Data::Gallery("Pics", &imgs)], &[], Theme::Light, 1);
+        assert!(svg.contains(r#"width="420" height="317""#), "{svg}");
+        assert!(svg.contains(r#"id="g0-3""#) && svg.contains("base64,&quot;x") && !svg.contains(r#"base64,"x"#));
+        // Wide: tile (850-50-50)/6 = 125, 1 row, untitled: 20 + 135 + 15.
+        let wide = compose(&[Data::Gallery("", &imgs)], &[true], Theme::Dark, 2);
+        assert!(wide.contains(r#"width="850" height="170""#), "{wide}");
+        assert!(!wide.contains(r#"class="t""#));
     }
 
     #[test]

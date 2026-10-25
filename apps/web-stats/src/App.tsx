@@ -2,14 +2,14 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { closestCenter, DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { arrayMove, rectSortingStrategy, SortableContext, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { CopyIcon, GripVerticalIcon, PlusIcon, RectangleHorizontalIcon, Trash2Icon } from 'lucide-react'
+import { CopyIcon, GripVerticalIcon, ImagePlusIcon, ImagesIcon, PlusIcon, RectangleHorizontalIcon, Trash2Icon, XIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { api, CARDS, MAX_CUSTOM, svgUrl, type Card, type Custom, type Entry, type Profile } from '@/lib/api'
+import { api, CARDS, MAX_CUSTOM, MAX_IMAGES, shrink, svgUrl, type Card, type Custom, type Entry, type Gallery, type Profile } from '@/lib/api'
 import { userManager } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 
@@ -20,11 +20,11 @@ const LABELS: Record<Card, string> = {
   spotify: 'Spotify now playing',
 }
 
-// `key` is only a React key: the card name, or a random id for custom cards (always on).
+// `key` is only a React key: the card name, or a random id for custom cards and galleries (always on).
 // `wide`: spans both columns when the layout has 2.
 type Item = { key: string; on: boolean; wide: boolean; entry: Entry }
 
-const custom = (entry: Custom, wide = false): Item => ({ key: crypto.randomUUID(), on: true, wide, entry })
+const custom = (entry: Custom | Gallery, wide = false): Item => ({ key: crypto.randomUUID(), on: true, wide, entry })
 
 /** Saved cards first, in their order, then the unused built-ins switched off. */
 const toItems = (cards: Entry[], wide: boolean[] = []): Item[] => [
@@ -88,6 +88,9 @@ export default function App() {
 
   const update = (key: string, patch: Partial<Item>) => setItems((xs) => xs.map((y) => (y.key === key ? { ...y, ...patch } : y)))
   const customCount = items.filter((x) => typeof x.entry !== 'string').length
+  // Patches a gallery from its latest state, since shrinking finishes after the user may have typed.
+  const updateGallery = (key: string, fn: (g: Gallery) => Gallery) =>
+    setItems((xs) => xs.map((y) => (y.key === key && typeof y.entry !== 'string' && 'images' in y.entry ? { ...y, entry: fn(y.entry) } : y)))
 
   const sensors = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }))
   const onDragEnd = ({ active, over }: DragEndEvent) => {
@@ -124,6 +127,12 @@ export default function App() {
       setSlug(p.slug)
       setSaved({ slug: p.slug, at: Date.now() })
       setNotice('Saved.')
+    })
+
+  const addPictures = (key: string, files: File[]) =>
+    run(async () => {
+      const uris = await Promise.all(files.map(shrink))
+      updateGallery(key, (g) => ({ ...g, images: [...g.images, ...uris].slice(0, MAX_IMAGES) }))
     })
 
   const linkSpotify = () =>
@@ -212,7 +221,8 @@ export default function App() {
                 <SortableContext items={shown.map((x) => x.key)} strategy={rectSortingStrategy}>
                   <ul className={cn('grid gap-2', columns === 2 && 'sm:grid-cols-2')}>
                     {shown.map((x) => {
-                      const name = typeof x.entry === 'string' ? LABELS[x.entry] : x.entry.title || 'custom card'
+                      const name =
+                        typeof x.entry === 'string' ? LABELS[x.entry] : x.entry.title || ('images' in x.entry ? 'gallery card' : 'custom card')
                       const widen = columns === 2 && (
                         <Button
                           type="button"
@@ -242,6 +252,73 @@ export default function App() {
                             )}
                           </SortableCard>
                         )
+                      const remove = (
+                        <Button type="button" size="icon" variant="ghost" aria-label={`Delete ${name}`} onClick={() => setItems((xs) => xs.filter((y) => y.key !== x.key))}>
+                          <Trash2Icon />
+                        </Button>
+                      )
+                      if ('images' in x.entry) {
+                        const g = x.entry
+                        return (
+                          <SortableCard key={x.key} id={x.key} label={name} className={cn(cell, 'items-start')}>
+                            {(handle) => (
+                              <>
+                                {handle}
+                                <div className="grid min-w-0 flex-1 gap-2">
+                                  <Input
+                                    aria-label="Gallery title"
+                                    placeholder="Title (optional)"
+                                    maxLength={38}
+                                    value={g.title}
+                                    onChange={(e) => update(x.key, { entry: { ...g, title: e.target.value } })}
+                                  />
+                                  <ul className="flex flex-wrap gap-2" aria-label={`Pictures in ${name}`}>
+                                    {g.images.map((src, j) => (
+                                      <li key={j} className="relative">
+                                        <img src={src} alt={`Picture ${j + 1}`} className="size-16 rounded-md object-cover" />
+                                        <Button
+                                          type="button"
+                                          size="icon-xs"
+                                          variant="secondary"
+                                          className="absolute -top-1.5 -right-1.5 rounded-full"
+                                          aria-label={`Remove picture ${j + 1}`}
+                                          onClick={() => updateGallery(x.key, (g) => ({ ...g, images: g.images.filter((_, k) => k !== j) }))}
+                                        >
+                                          <XIcon />
+                                        </Button>
+                                      </li>
+                                    ))}
+                                    {g.images.length < MAX_IMAGES && (
+                                      <li>
+                                        <label className="flex size-16 cursor-pointer items-center justify-center rounded-md border border-dashed text-muted-foreground focus-within:ring-3 focus-within:ring-ring/50 hover:bg-muted">
+                                          <ImagePlusIcon className="size-5" />
+                                          <span className="sr-only">Add pictures to {name}</span>
+                                          <input
+                                            type="file"
+                                            accept="image/*"
+                                            multiple
+                                            className="sr-only"
+                                            disabled={busy}
+                                            onChange={(e) => {
+                                              const files = [...(e.target.files ?? [])].slice(0, MAX_IMAGES - g.images.length)
+                                              e.target.value = '' // lets the same file be picked again
+                                              if (files.length) addPictures(x.key, files)
+                                            }}
+                                          />
+                                        </label>
+                                      </li>
+                                    )}
+                                  </ul>
+                                </div>
+                                <div className="grid">
+                                  {widen}
+                                  {remove}
+                                </div>
+                              </>
+                            )}
+                          </SortableCard>
+                        )
+                      }
                       const c = x.entry
                       return (
                         <SortableCard key={x.key} id={x.key} label={name} className={cn(cell, 'items-start')}>
@@ -269,9 +346,7 @@ export default function App() {
                               </div>
                               <div className="grid">
                                 {widen}
-                                <Button type="button" size="icon" variant="ghost" aria-label={`Delete ${name}`} onClick={() => setItems((xs) => xs.filter((y) => y.key !== x.key))}>
-                                  <Trash2Icon />
-                                </Button>
+                                {remove}
                               </div>
                             </>
                           )}
@@ -295,15 +370,14 @@ export default function App() {
                   )}
                 </ul>
               )}
-              <Button
-                type="button"
-                variant="outline"
-                className="justify-self-start"
-                disabled={customCount >= MAX_CUSTOM}
-                onClick={() => setItems((xs) => [...xs, custom({ title: '', text: '' })])}
-              >
-                <PlusIcon /> Add custom card
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="outline" disabled={customCount >= MAX_CUSTOM} onClick={() => setItems((xs) => [...xs, custom({ title: '', text: '' })])}>
+                  <PlusIcon /> Add custom card
+                </Button>
+                <Button type="button" variant="outline" disabled={customCount >= MAX_CUSTOM} onClick={() => setItems((xs) => [...xs, custom({ title: '', images: [] })])}>
+                  <ImagesIcon /> Add gallery card
+                </Button>
+              </div>
             </fieldset>
     
             <div className="flex flex-wrap items-center gap-3">

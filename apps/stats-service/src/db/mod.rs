@@ -20,12 +20,14 @@ pub enum Card {
     Spotify,
 }
 
-/// A layout entry: a built-in card name, or a user's own `{"title", "text"}` card.
+/// A layout entry: a built-in card name, a user's own `{"title", "text"}` card,
+/// or a `{"title", "images"}` gallery of JPEG `data:` URIs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Item {
     Card(Card),
     Custom { title: String, text: String },
+    Gallery { title: String, images: Vec<String> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

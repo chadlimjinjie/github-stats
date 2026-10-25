@@ -33,6 +33,10 @@ const STATE_TTL_SECS: u64 = 600;
 const MAX_CUSTOM: usize = 5;
 const MAX_TITLE: usize = 38;
 const MAX_TEXT: usize = 280;
+const MAX_IMAGES: usize = 6;
+/// Per gallery image, in `data:` URI chars; web-stats shrinks pictures to fit.
+const MAX_IMAGE: usize = 40_000;
+const JPEG_PREFIX: &str = "data:image/jpeg;base64,";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -122,22 +126,44 @@ fn validate(b: &mut PutBody) -> Result<(), &'static str> {
                 seen.push(*c);
                 true
             },
-            Item::Custom { .. } => true,
+            _ => true,
         })
         .unzip();
     (layout.cards, layout.wide) = (cards, wide);
     let mut customs = 0;
     for c in &mut b.layout.cards {
-        if let Item::Custom { title, text } = c {
-            customs += 1;
-            *title = title.trim().to_string();
-            *text = text.trim().to_string();
-            if title.is_empty() || title.chars().count() > MAX_TITLE {
-                return Err("Custom card title must be 1-38 characters");
+        match c {
+            Item::Custom { title, text } => {
+                customs += 1;
+                *title = title.trim().to_string();
+                *text = text.trim().to_string();
+                if title.is_empty() || title.chars().count() > MAX_TITLE {
+                    return Err("Custom card title must be 1-38 characters");
+                }
+                if text.chars().count() > MAX_TEXT {
+                    return Err("Custom card text must be at most 280 characters");
+                }
             }
-            if text.chars().count() > MAX_TEXT {
-                return Err("Custom card text must be at most 280 characters");
+            Item::Gallery { title, images } => {
+                customs += 1;
+                *title = title.trim().to_string();
+                if title.chars().count() > MAX_TITLE {
+                    return Err("Gallery title must be at most 38 characters");
+                }
+                if images.is_empty() || images.len() > MAX_IMAGES {
+                    return Err("A gallery needs 1-6 pictures");
+                }
+                // Trust boundary: these go straight into an SVG href.
+                let jpeg = |s: &str| {
+                    s.len() <= MAX_IMAGE
+                        && s.strip_prefix(JPEG_PREFIX)
+                            .is_some_and(|b| !b.is_empty() && b.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'/' | b'=')))
+                };
+                if !images.iter().all(|s| jpeg(s)) {
+                    return Err("Gallery pictures must be small JPEG images");
+                }
             }
+            Item::Card(_) => {}
         }
     }
     if customs > MAX_CUSTOM {
@@ -280,6 +306,7 @@ pub async fn card(State(st): State<AppState>, Path(file): Path<String>) -> Respo
         .iter()
         .map(|item| match item {
             Item::Custom { title, text } => Data::Custom(title, text),
+            Item::Gallery { title, images } => Data::Gallery(title, images),
             Item::Card(c) => builtin(c, &gh, &sp),
         })
         .collect();
@@ -332,6 +359,23 @@ mod tests {
         assert!(validate(&mut body("a_bc", "", vec![], 1)).is_err());
         assert!(validate(&mut body("abc", "bad/login", vec![], 1)).is_err());
         assert!(validate(&mut body("abc", "", vec![], 3)).is_err());
+
+        let gallery = |title: &str, images: Vec<String>| Item::Gallery { title: title.into(), images };
+        let ok = format!("{JPEG_PREFIX}/9j/4AA=");
+        let mut b = body("abc", "", vec![gallery(" ", vec![ok.clone(); 6])], 1);
+        assert!(validate(&mut b).is_ok());
+        assert_eq!(b.layout.cards, vec![gallery("", vec![ok.clone(); 6])]);
+        assert!(validate(&mut body("abc", "", vec![gallery("t", vec![])], 1)).is_err());
+        assert!(validate(&mut body("abc", "", vec![gallery("t", vec![ok.clone(); 7])], 1)).is_err());
+        assert!(validate(&mut body("abc", "", vec![gallery("t", vec!["javascript:alert(1)".into()])], 1)).is_err());
+        assert!(validate(&mut body("abc", "", vec![gallery("t", vec![format!("{JPEG_PREFIX}a\"b")])], 1)).is_err());
+        assert!(validate(&mut body("abc", "", vec![gallery("t", vec!["data:image/svg+xml;base64,AAAA".into()])], 1)).is_err());
+        assert!(validate(&mut body("abc", "", vec![gallery("t", vec![format!("{JPEG_PREFIX}{}", "A".repeat(MAX_IMAGE))])], 1)).is_err());
+        let mixed = vec![custom("t", ""), custom("t", ""), custom("t", ""), gallery("", vec![ok.clone()]), gallery("", vec![ok.clone()]), gallery("", vec![ok])];
+        assert!(validate(&mut body("abc", "", mixed, 1)).is_err());
+        // A JSON gallery parses as a gallery, not a custom card.
+        let item: Item = serde_json::from_str(r#"{"title":"","images":["x"]}"#).unwrap();
+        assert!(matches!(item, Item::Gallery { .. }));
     }
 
     #[test]
