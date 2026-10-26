@@ -209,7 +209,8 @@ fn custom(heading: &str, text: &str, w: u32) -> (u32, String) {
     for (i, line) in lines.iter().enumerate() {
         let _ = write!(s, r#"<text x="25" y="{}" class="l">{}</text>"#, 65 + 20 * i as u32, esc(line));
     }
-    (55 + 20 * lines.len() as u32, s)
+    // Keep 20px under the last baseline, like the other cards.
+    (if lines.is_empty() { 55 } else { 65 + 20 * lines.len() as u32 }, s)
 }
 
 /// Square thumbnails, 3 per row (6 when wide), under an optional title.
@@ -375,7 +376,7 @@ b", 5, 3), ["a", "", "b"]);
 there")], &[], &[], Theme::Light, 1);
         assert!(!svg.contains("<script>") && !svg.contains("<b>"));
         assert!(svg.contains("hi &lt;script&gt;"));
-        assert!(svg.contains(r#"width="420" height="95""#), "{svg}"); // 55 + 2 lines
+        assert!(svg.contains(r#"width="420" height="105""#), "{svg}"); // 65 + 2 lines
     }
 
     #[test]
